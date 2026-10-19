@@ -1,0 +1,76 @@
+# Run from the repository root:  docker compose -f deploy/docker-compose.yml up --build
+# Needs the final model in artifacts (repository root): wavlm.pt + bundle.json. On the first start each container downloads
+# WavLM-Base+'s pretrained base weights (~380 MB) into the shared "torch-cache" volume.
+# The CPU image serves a handful of calls (~5 calls per CPU, docs/AUDIT.md phase 28). For ~235 calls per GPU add the GPU override (needs an NVIDIA GPU in Docker):
+#   docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml up -d --build
+# Scam intent from audio inside a container (local Whisper; ~1 GB of weights on first use, cached in the hf-cache volume):
+#   docker compose -f deploy/docker-compose.yml run --rm -v <folder>:/data:ro api python -m audiodf intent --audio /data/call.wav
+# Simulate a call from inside the network:
+#   docker compose -f deploy/docker-compose.yml run --rm worker python -m audiodf produce /data/call.wav --realtime
+# (mount a folder with the recording at /data first), or from the host against a published Kafka port with `python -m audiodf produce`.
+# LLM explanations: export AUDIODF_LLM_API_KEY in your own shell before `up`; it is passed through, never written to a file.
+
+name: audiodf  # pins the project name (container, network and volume names; deploy/smoke_test.py uses them)
+
+services:
+  kafka:
+    image: apache/kafka:4.1.1
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  api:
+    build: {context: .., dockerfile: deploy/Dockerfile}
+    ports: ["8000:8000"]
+    environment:
+      AUDIODF_LLM_API_KEY: ${AUDIODF_LLM_API_KEY:-}
+      TORCH_HOME: /cache/torch
+      HF_HOME: /cache/hf
+    volumes: ["../artifacts:/models:ro", "torch-cache:/cache/torch", "hf-cache:/cache/hf"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if b'\"ok\"' in urllib.request.urlopen('http://localhost:8000/health').read() else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 20
+      start_period: 120s
+
+  worker:
+    build: {context: .., dockerfile: deploy/Dockerfile}
+    command: ["python", "-m", "audiodf", "consume", "--metrics-port", "9100"]
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      TORCH_HOME: /cache/torch
+      HF_HOME: /cache/hf
+    volumes: ["../artifacts:/models:ro", "torch-cache:/cache/torch", "hf-cache:/cache/hf"]
+    depends_on: [kafka]
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports: ["9090:9090"]
+    volumes: ["./prometheus.yml:/etc/prometheus/prometheus.yml:ro"]
+
+  grafana:
+    image: grafana/grafana:latest
+    ports: ["3000:3000"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"        # demo only: no login screen; remove for anything shared
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/audiodf.json
+    volumes:
+      - ./grafana-datasource.yml:/etc/grafana/provisioning/datasources/prometheus.yml:ro
+      - ./grafana-dashboards.yml:/etc/grafana/provisioning/dashboards/audiodf.yml:ro
+      - ./grafana-dashboard.json:/var/lib/grafana/dashboards/audiodf.json:ro
+    depends_on: [prometheus]
+
+volumes:
+  torch-cache:
+  hf-cache:

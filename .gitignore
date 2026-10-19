@@ -1,0 +1,9 @@
+dataset*/
+/artifacts/
+artifacts_*/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+*.pptx
+.venv/
