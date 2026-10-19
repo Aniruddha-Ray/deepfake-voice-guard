@@ -57,6 +57,16 @@ docker compose -f deploy/docker-compose.yml up -d                               
 python deploy/smoke_test.py some.flac other.flac --kafka                            # 12 checks end to end
 ```
 
+## CI and releases
+- **CI** (`.github/workflows/ci.yml`): every push to `main` and every pull request runs the tests and builds the CPU image.
+- **CD** (`.github/workflows/release.yml`): pushing a version tag publishes the CPU image to GitHub Container Registry after the tests, a compose-file check and an image smoke test pass:
+  ```bash
+  git tag v1.0.0 && git push origin v1.0.0
+  docker pull ghcr.io/aniruddha-ray/deepfake-voice-guard:1.0.0      # the package is private until you make it public in the package settings
+  docker run -p 8000:8000 -v "$PWD/artifacts:/models:ro" ghcr.io/aniruddha-ray/deepfake-voice-guard:1.0.0
+  ```
+  The weights are not in the image; mount them at `/models`. Nothing is deployed to a server or cluster automatically (none exists yet).
+
 ## Retrain and re-evaluate
 The datasets are not in the repository and must be downloaded: ASVspoof 5, ASVspoof 2019 LA, ASVspoof 2021 LA eval, In-the-Wild, and for the noise recipe MUSAN, RIRS_NOISES, DEMAND, ESC-50 and the MIT Impulse Response Survey. Paths: `configs/default.yaml` or `AUDIODF_ASV5`, `AUDIODF_DATA`, `AUDIODF_NOISE` and so on.
 ```bash
