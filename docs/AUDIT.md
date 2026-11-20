@@ -1023,6 +1023,20 @@ eval clips; rendered in 418 s (23 calls/s); indexing 65 s, no call without speec
   `docker compose -f deploy/docker-compose.yml -f deploy/docker-compose.gpu.yml build api`. Not tested: an NVIDIA GPU under Kubernetes (needs the device plugin; manifest has a note only).
 - **Finishing (2026-10-18):** CI green on 0a43864. Model card (`MODEL_CARD.md`) and demo guide (`DEMO_GUIDE.md`) written; demo commands run once as written. **Disk cleanup:** pip, uv and Docker build caches, my images and volumes, then (by the user) the public datasets (`dataset5` 69 GB, `dataset21` 14 GB, `dataset_itw` 8 GB, `dataset19` 7 GB, `dataset_noise` 5 GB) and the feature cache: **retraining or re-running the ASVspoof / In-the-Wild evaluations needs a re-download**; the saved scores and reports in `results/` remain. Full suite after cleanup: 204 passed (the 14 codec tests earlier failed only on the 15 GB free-disk guard). Compose stack and the standalone `kafka` container stopped. Kubernetes deliberately skipped. Still local-only: weights (no DVC remote yet), old bundles (run 7 seed 1, run 8, run 9), the `dataset_calls*` folders.
 
+### Phase 35: every call gets a final verdict; WebSocket streaming fixed in the container (2026-11-21)
+
+- **The gap:** a call's session was closed silently in three cases: no audio for 30 s (the platform never sent `eof`), the 1000-call capacity limit, and a
+  WebSocket closed without `end`. The verdicts already sent stood, but nothing marked the call as finished.
+- **Fix:** every closed session now produces one final verdict with `ended` = `eof` (normal end), `timeout`, `capacity` or `disconnect`
+  (`streaming/processor.py` `close()`; the Kafka worker publishes timeout and capacity verdicts; the WebSocket finalises, counts and logs a warning on a drop). New
+  Prometheus counter `audiodf_calls_ended_total{reason}` and a Grafana panel. **Also fixed:** the Kafka worker keyed every verdict by the incoming chunk's call, so a verdict
+  for a call closed to make room would have carried another call's key.
+- **Checked on the running stack:** a Kafka call sent without `eof` got its final verdict (verify, 0.7776, `ended: "timeout"`) about 35 s after its last audio; a
+  WebSocket closed mid-call was counted and logged (`disconnect`); a normal `end` returned `ended: "eof"`. Tests: capacity, timeout, eof, no-audio, WebSocket drop, and the
+  worker loop with a fake broker (all three endings, each keyed by its own call). Full suite: 206 passed, 1 skipped.
+- **Defect found while testing (mistake 30):** `/stream/{call_id}` answered **404 in every container image**: uvicorn had no WebSocket library (`websockets` was only a
+  dev dependency, so the tests passed). Fixed in `requirements.txt` and `pyproject.toml`, and the smoke test now streams one recording over the WebSocket (13 checks).
+
 ## 3. Decisions and the reasoning behind them
 
 - **Train on ASV5 only, drop ASV2019 (run 1).** Chosen because ASV5 dev gives attack-disjoint tuning and ASV2019 has a silence
@@ -1131,6 +1145,9 @@ eval clips; rendered in 418 s (23 calls/s); indexing 65 s, no call without speec
     template fallback hid it from the user). Found when the key was first used (phase 32); default updated. Lesson: test a provider integration with a real call as soon as a key exists.
 29. The deployment scaffold (compose, Kubernetes, Kafka worker) was written untested; running it for real found seven defects (phase 33), including the loss of the first
     calls after a fresh deploy. Lesson: run the stack before calling it deployable, and keep a smoke test (`deploy/smoke_test.py`).
+30. The WebSocket endpoint never worked inside the containers (HTTP 404: no WebSocket library at runtime) through two "all checks passed" deployment runs, because the
+    smoke test did not touch `/stream` and the unit tests ran with dev dependencies. Lesson: a smoke test must exercise every advertised entry point, and runtime
+    requirements must be checked against what the service imports at run time, not what the test environment happens to have (phase 35).
 
 ## 5. Known limitations (current)
 

@@ -9,8 +9,10 @@ GET  /health, GET /metrics
 
 from __future__ import annotations
 
+import logging
 import time
 from contextlib import asynccontextmanager
+from dataclasses import replace
 
 from fastapi import FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
@@ -20,6 +22,8 @@ from audiodf.data.audio import load_audio, pcm16_to_float
 from audiodf.inference.engine import DetectionEngine
 from audiodf.inference.session import CallSession
 from audiodf.monitoring import metrics
+
+log = logging.getLogger("audiodf.api")
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 
@@ -105,6 +109,7 @@ def create_app(engine: DetectionEngine | None = None, settings: Settings | None 
         await ws.accept()
         session = CallSession(eng, call_id)
         metrics.ACTIVE_SESSIONS.inc()
+        ended = False
         try:
             while True:
                 msg = await ws.receive()
@@ -113,8 +118,10 @@ def create_app(engine: DetectionEngine | None = None, settings: Settings | None 
                 if msg.get("bytes") is not None:
                     verdict = await run_in_threadpool(session.push, pcm16_to_float(msg["bytes"]))
                 elif (msg.get("text") or "").strip().lower() == "end":
+                    ended = True
                     verdict = await run_in_threadpool(session.finalize)
                     if verdict:
+                        verdict = replace(verdict, ended="eof")
                         metrics.record_verdict(verdict, "ws")
                         await ws.send_json(verdict.to_dict())
                     break
@@ -126,6 +133,14 @@ def create_app(engine: DetectionEngine | None = None, settings: Settings | None 
         except WebSocketDisconnect:
             pass
         finally:
+            if not ended:  # closed without "end": nobody to send to, but the final verdict is still counted and logged
+                verdict = await run_in_threadpool(session.finalize)
+                if verdict:
+                    verdict = replace(verdict, ended="disconnect")
+                    metrics.record_verdict(verdict, "ws")
+                    log.warning("call %s disconnected without 'end': final %s (%.4f)", call_id, verdict.action, verdict.fake_probability)
+                else:
+                    metrics.CALLS_ENDED.labels("disconnect").inc()
             metrics.ACTIVE_SESSIONS.dec()
             try:
                 await ws.close()

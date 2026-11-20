@@ -76,10 +76,20 @@ def test_chunk_processor_routes_calls_and_ends_on_eof(engine):
 def test_chunk_processor_evicts_idle_and_caps_sessions(engine):
     proc = ChunkProcessor(engine)
     proc.cfg = type(proc.cfg)(session_idle_seconds=-1, max_sessions=2)
-    for cid in "abc":
-        proc.handle(cid, float_to_pcm16(tone(0.5)))
+    closed = [v for cid in "abc" for v in proc.handle(cid, float_to_pcm16(tone(0.5)))]
     assert len(proc.sessions) == 2
-    assert len(proc.evict_idle()) == 2 and not proc.sessions
+    # the call pushed out to make room still gets a final verdict, under its own call_id
+    assert [(v.call_id, v.final, v.ended) for v in closed] == [("a", True, "capacity")]
+    timed_out = proc.evict_idle()
+    assert sorted((v.call_id, v.final, v.ended) for v in timed_out) == [("b", True, "timeout"), ("c", True, "timeout")]
+    assert not proc.sessions
+
+
+def test_a_normal_end_is_tagged_eof_and_a_call_without_audio_gives_no_verdict(engine):
+    proc = ChunkProcessor(engine)
+    out = proc.handle("a", float_to_pcm16(tone(3)), eof=True)
+    assert out[-1].final and out[-1].ended == "eof" and all(v.ended is None for v in out[:-1])
+    assert proc.handle("empty", b"", eof=True) == [] and not proc.sessions
 
 
 def _wav_bytes(wave):
@@ -119,4 +129,21 @@ def test_api_websocket_stream(engine, settings):
         except Exception:
             pass
     assert verdicts and verdicts[-1]["final"] and verdicts[-1]["call_id"] == "call-9"
+    assert verdicts[-1]["ended"] == "eof" and all(v["ended"] is None for v in verdicts[:-1])
     assert np.isfinite(verdicts[-1]["fake_probability"])
+
+
+def test_api_websocket_closed_without_end_still_records_a_final_verdict(engine, settings):
+    from audiodf.monitoring import metrics
+
+    def ended(reason):
+        return metrics.REGISTRY.get_sample_value("audiodf_calls_ended_total", {"reason": reason}) or 0
+
+    before = ended("disconnect")
+    with TestClient(create_app(engine, settings)) as client:
+        with client.websocket_connect("/stream/call-dropped") as ws:
+            ws.send_bytes(float_to_pcm16(tone(3, noise=0.1)))
+            ws.receive_json()  # the 2 s window's verdict: the session has audio
+        # leaving the block closes the socket without "end"; the server finalises in its cleanup
+        assert client.get("/health").status_code == 200
+    assert ended("disconnect") == before + 1

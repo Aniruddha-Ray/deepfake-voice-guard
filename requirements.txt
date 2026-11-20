@@ -8,6 +8,7 @@ torchaudio
 pyyaml
 fastapi
 uvicorn
+websockets  # uvicorn's WebSocket support: without it /stream/{call_id} answers 404 in the container
 prometheus_client
 imageio-ffmpeg
 encodec

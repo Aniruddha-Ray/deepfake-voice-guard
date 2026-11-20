@@ -93,11 +93,18 @@ def run_consumer(settings: Settings, engine: DetectionEngine | None = None, metr
     log(f"consuming {settings.kafka.audio_topic} -> {settings.kafka.result_topic}")
 
     last_sweep = time.monotonic()
+
+    def publish(verdicts):
+        for v in verdicts:  # keyed by the verdict's own call: a chunk can close another call (capacity)
+            metrics.record_verdict(v, "kafka")
+            producer.produce(settings.kafka.result_topic, key=v.call_id, value=json.dumps(v.to_dict()).encode())
+        producer.poll(0)
+
     try:
         while True:
             msg = consumer.poll(1.0)
             if time.monotonic() - last_sweep > 5:
-                processor.evict_idle()
+                publish(processor.evict_idle())  # calls whose eof never came: final verdict, ended="timeout"
                 last_sweep = time.monotonic()
             if msg is None:
                 continue
@@ -113,10 +120,7 @@ def run_consumer(settings: Settings, engine: DetectionEngine | None = None, metr
                 metrics.ERRORS.labels("kafka").inc()
                 log(f"failed on call {call_id}: {exc}")
                 continue
-            for v in verdicts:
-                metrics.record_verdict(v, "kafka")
-                producer.produce(settings.kafka.result_topic, key=call_id, value=json.dumps(v.to_dict()).encode())
-            producer.poll(0)
+            publish(verdicts)
     except KeyboardInterrupt:
         pass
     finally:

@@ -18,6 +18,7 @@ dependencies = [
     "pyyaml",
     "fastapi",
     "uvicorn",
+    "websockets",
     "prometheus_client",
     "imageio-ffmpeg",
     "encodec",
@@ -25,7 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 kafka = ["confluent-kafka"]
-dev = ["pytest", "httpx", "websockets", "pyarrow"]
+dev = ["pytest", "httpx", "pyarrow"]
 
 [project.scripts]
 audiodf = "audiodf.cli:main"

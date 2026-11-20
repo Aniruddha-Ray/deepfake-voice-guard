@@ -31,7 +31,7 @@ docker compose -f deploy/docker-compose.yml up -d              # Kafka, API, wor
 python deploy/smoke_test.py dataset_calls/flac/E_0001322931.flac dataset_calls/flac/E_0000502309.flac --kafka    # add --image audiodf-gpu for the GPU image
 docker compose -f deploy/docker-compose.yml down
 ```
-The smoke test prints 12 checks, all should say `[ok]`: API health, `/predict`, `/explain`, Kafka verdicts for both calls, Prometheus targets, Grafana dashboard.
+The smoke test prints 13 checks, all should say `[ok]`: API health, `/predict`, `/explain`, the WebSocket stream, Kafka verdicts for both calls, Prometheus targets, Grafana dashboard.
 Open Grafana at http://localhost:3000 (dashboard "Deepfake voice detection", no login in demo mode) and Prometheus at http://localhost:9090. API docs: http://localhost:8000/docs.
 First start downloads the speech model weights (internet needed once). The Kafka step needs a broker: the compose stack starts one; a separate `kafka` container on port 9092 must be stopped first.
 

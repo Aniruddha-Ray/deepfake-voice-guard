@@ -25,7 +25,7 @@ def test_both_images_install_the_same_requirements_and_differ_only_in_the_pytorc
 
 def test_the_runtime_requirements_cover_what_the_container_imports():
     req = (DEPLOY.parent / "requirements.txt").read_text().lower()
-    for pkg in ("confluent-kafka", "shap", "matplotlib", "requests", "transformers", "prometheus_client", "fastapi", "uvicorn", "torch"):
+    for pkg in ("confluent-kafka", "shap", "matplotlib", "requests", "transformers", "prometheus_client", "fastapi", "uvicorn", "websockets", "torch"):
         assert pkg in req, f"{pkg} is imported by the service but missing from requirements.txt"
 
 

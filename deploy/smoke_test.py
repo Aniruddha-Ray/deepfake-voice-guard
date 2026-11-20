@@ -2,7 +2,8 @@
 
   python deploy/smoke_test.py path/to/call1.flac [path/to/call2.flac ...]
 
-Checks, in order: the API is healthy; /predict and /explain answer for every recording; both Prometheus targets are up and counting verdicts;
+Checks, in order: the API is healthy; /predict and /explain answer for every recording; the WebSocket stream ends with a
+final verdict tagged ended="eof" after "end" (first recording); both Prometheus targets are up and counting verdicts;
 Grafana has its datasource and dashboard; and (with --kafka) the Kafka path: each recording is sent as chunks from a one-off container on the
 compose network and a final verdict comes back on the result topic. Prints one line per check and exits 1 if any fails.
 """
@@ -37,6 +38,40 @@ def get(url: str, timeout: float = 30) -> dict:
 
 def post(url: str, body: bytes, timeout: float = 300) -> dict:
     return json.loads(urllib.request.urlopen(urllib.request.Request(url, data=body, method="POST"), timeout=timeout).read())
+
+
+def stream_check(f: Path) -> None:
+    """/stream/{call_id} over a WebSocket: verdicts while streaming, then a final one tagged ended="eof" after "end"."""
+    import asyncio
+
+    import soundfile as sf
+    import websockets
+
+    audio, sr = sf.read(f, dtype="int16")
+    if audio.ndim > 1 or sr != 16000:
+        check(f"/stream {f.name}", True, "skipped: needs 16 kHz mono audio")
+        return
+
+    async def run():
+        got = []
+        async with websockets.connect(API.replace("http", "ws") + f"/stream/smoke-ws-{uuid.uuid4().hex[:6]}") as ws:
+            for i in range(0, len(audio), 8000):
+                await ws.send(audio[i:i + 8000].tobytes())
+            await ws.send("end")
+            try:
+                while True:
+                    got.append(json.loads(await asyncio.wait_for(ws.recv(), 30)))
+            except Exception:
+                pass
+        return got
+
+    try:
+        got = asyncio.run(run())
+        last = got[-1] if got else {}
+        check(f"/stream {f.name}", bool(got) and last.get("final") and last.get("ended") == "eof",
+              f"{len(got)} verdicts, final {last.get('action')} ({last.get('fake_probability')}), ended {last.get('ended')}")
+    except Exception as exc:
+        check(f"/stream {f.name}", False, str(exc)[:160])
 
 
 def kafka_check(files: list[Path], image: str) -> None:
@@ -85,6 +120,7 @@ def main() -> int:
         check(f"/predict {f.name}", v["action"] in ("allow", "verify", "escalate"), f"{v['action']}, score {v['fake_probability']:.4f}, {v['latency_ms']:.0f} ms")
         e = post(f"{API}/explain?nsamples=60", f.read_bytes())
         check(f"/explain {f.name}", bool(e["explanation"]["summary"]) and "facts" in e, f"check faithful: {e['facts']['attribution_check'].get('faithful')}")
+    stream_check(args.recordings[0])
     if args.kafka:
         kafka_check(args.recordings, args.image)
     time.sleep(10)

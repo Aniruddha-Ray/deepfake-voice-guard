@@ -50,11 +50,22 @@ python -m pytest                                          # 200+ tests, no datas
 ```
 Stream over a WebSocket: send binary frames of 16 kHz mono PCM16; a JSON verdict arrives each time a 2 s window completes (from 2 s of speech on, then every 1 s); send the text frame `end` for the final verdict. The thresholds in `artifacts/bundle.json` override the config at serving time.
 
+**Call start and end.** The model has no switch of its own; the call platform's audio drives it. A call **starts** when the first chunk with a new `call_id` arrives (Kafka) or a WebSocket opens on `/stream/{call_id}`; no start message is needed. A call **ends** when the platform says so: the last Kafka chunk carries the header `eof=1`, or the WebSocket client sends `end`. Every call gets one final verdict (`"final": true`) whose `ended` field says why the session closed:
+
+| `ended` | When |
+|---|---|
+| `eof` | the platform signalled the end (normal hang-up) |
+| `timeout` | no audio for `stream.session_idle_seconds` (30 s): the platform never sent `eof` (dropped link, crashed connector) |
+| `capacity` | closed to make room for a new call at `stream.max_sessions` (1000) |
+| `disconnect` | the WebSocket closed without `end` (verdict counted and logged; nobody left to send it to) |
+
+Anything but `eof` may have cut the call short, so its final verdict can rest on less audio. Prometheus counts them in `audiodf_calls_ended_total{reason}`.
+
 Docker (from the repository root):
 ```bash
 docker compose -f deploy/docker-compose.yml up -d                                   # Kafka, API, worker, Prometheus, Grafana
 # GPU: add  -f deploy/docker-compose.gpu.yml  and  --build
-python deploy/smoke_test.py some.flac other.flac --kafka                            # 12 checks end to end
+python deploy/smoke_test.py some.flac other.flac --kafka                            # 13 checks end to end
 ```
 
 ## CI and releases

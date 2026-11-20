@@ -41,6 +41,10 @@ class Verdict:
     call_id: str | None = None
     wavlm_probability: float | None = None
     whisper_probability: float | None = None
+    # On the final verdict only: why the call's session closed. "eof" = the caller's audio ended normally (Kafka eof header,
+    # WebSocket "end"); "timeout" = no audio for stream.session_idle_seconds; "capacity" = closed to make room at
+    # stream.max_sessions; "disconnect" = the WebSocket closed without "end". Anything but "eof" may have cut the call short.
+    ended: str | None = None
 
     def to_dict(self) -> dict:
         return asdict(self)
