@@ -124,7 +124,7 @@ def _encodec_installed() -> bool:
 
 def missing_codecs(names=None) -> list[str]:
     """Catalogue codecs this machine cannot render. The imageio-ffmpeg binaries differ by platform: the Windows
-    build (7.1) has every ffmpeg codec, the Linux build (7.0.2) lacks libgsm. EnCodec needs `pip install encodec`."""
+    build (7.1) has every ffmpeg codec, the Linux build (7.0.2) lacks libgsm and libvo_amrwbenc (AMR-WB). EnCodec needs `pip install encodec`."""
     exe = ffmpeg_exe()
     encoders, decoders = _ffmpeg_codec_names(exe, "encoders"), _ffmpeg_codec_names(exe, "decoders")
     out = []

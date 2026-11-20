@@ -9,7 +9,7 @@ pytest.importorskip("imageio_ffmpeg")
 from audiodf.config import Settings  # noqa: E402
 from audiodf.calibrate import (calibrate, make_wavlm_bundle, policy_thresholds, speaker_halves,  # noqa: E402
                                threshold_rates)
-from audiodf.data.ffmpeg_codecs import missing_codecs  # noqa: E402
+from audiodf.data.ffmpeg_codecs import BY_NAME, missing_codecs  # noqa: E402
 from audiodf.data.prepare import build_index  # noqa: E402
 from audiodf.data.protocol import read_protocol  # noqa: E402
 from audiodf.data.voip_sim import (CALL_COLUMNS, PROFILES, CallPlan, add_noise, drop_packets, make_call,  # noqa: E402
@@ -79,9 +79,9 @@ def test_packet_loss_conceals_by_repeating_and_fading():
 
 @pytest.mark.parametrize("profile", [p.name for p in PROFILES])
 def test_every_voip_profile_returns_audio_of_the_same_length(profile):
-    if profile == "gsm" and missing_codecs(["gsm"]):
-        pytest.skip("this ffmpeg build lacks libgsm")
     p = next(q for q in PROFILES if q.name == profile)
+    if p.codec is not None and missing_codecs([p.codec.name]):
+        pytest.skip(f"this ffmpeg build lacks the encoder for {p.codec.name}")  # the Linux build lacks libgsm and libvo_amrwbenc
     x = _speechlike(3.0)
     out = make_call(x, CallPlan(p, p.variants[0], "none", float("nan"), 0, 0))
     assert out.shape == x.shape and np.isfinite(out).all() and np.abs(out).max() <= 1.0
@@ -101,8 +101,8 @@ def test_render_calls_writes_a_protocol_the_evaluator_reads(asv5, tmp_path):
     with pytest.raises(ValueError, match="not enough"):
         select_sources(idx, n_genuine=3, n_per_attack=1)
     asv5.paths.calls_root = str(tmp_path / "calls")
-    if missing_codecs(sorted({plan(str(u), 3).profile.name for u in idx.utt_id[sources]} & {"gsm"})):
-        pytest.skip("this ffmpeg build lacks libgsm")
+    if missing_codecs(sorted({plan(str(u), 3).profile.name for u in idx.utt_id[sources]} & set(BY_NAME))):
+        pytest.skip("this ffmpeg build lacks an encoder one of the calls needs")
     lines = []
     assert render_calls(idx, sources, asv5, asv5.paths.calls_root, seed=3, workers=2, log=lines.append) == 4
     samples = read_protocol(asv5.dataset_root("calls"), "eval", dataset="calls", available_only=True)
